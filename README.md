@@ -5,7 +5,7 @@
 
 ## Overview
 
-This repository contains the simulation code, experimental parameters, and datasets for the research paper:
+This repository contains the simulation code, experimental parameters, and datasets for the research:
 
 > **Adaptive Proof Window Scheduling for Continuous Zero Knowledge Proof Transfer**  
 > Muhammad Shahid, Suziyanti Marjudi, Abd Samad Hasan Basari  
@@ -45,7 +45,7 @@ adaptive-proof-scheduling/
 ├── scripts/
 │   ├── run_experiment.py        # Execute full experiment suite
 │   ├── analyze_results.py       # Statistical analysis
-│   └── generate_figures.py      # Reproduce paper figures
+│   └── generate_figures.py      # Reproduce  figures
 └── docs/
     └── experimental_setup.md    # Detailed experimental methodology
 ```
