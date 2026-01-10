@@ -1,6 +1,6 @@
 # Adaptive Proof Window Scheduling for Continuous Zero-Knowledge Proof Transfer
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+![License](https://img.shields.io/badge/License-Academic%20Research-lightgrey.svg)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 
 ## Overview
@@ -21,7 +21,8 @@ The adaptive proof window scheduling mechanism optimizes zero-knowledge proof ge
 ```
 adaptive-proof-scheduling/
 ├── README.md                    # This file
-├── LICENSE                      # MIT License
+├── LICENSE                      # project is licensed under the BSD 3-Clause License.
+ License
 ├── requirements.txt             # Python dependencies
 ├── configs/
 │   ├── simulation_params.yaml   # Core simulation parameters
@@ -165,7 +166,9 @@ If you use this code or data in your research, please cite:
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+## License
+This project is licensed under the BSD 3-Clause License.
+- see the [LICENSE](LICENSE) file for details.
 
 ## Acknowledgments
 
