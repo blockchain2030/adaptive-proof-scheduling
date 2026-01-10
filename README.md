@@ -156,7 +156,7 @@ If you use this code or data in your research, please cite:
 ```bibtex
 @article{shahid2026adaptive,
   title={Adaptive Proof Window Scheduling for Continuous Zero Knowledge Proof Transfer},
-  author={Shahid, Muhammad and Marjudi, Suziyanti and Basari, Abd Samad Hasan},
+  author={Muhammad Shahid and Suziyanti Marjudi  and Abd Samad Hasan Basari},
   journal={[Journal Name]},
   year={2026},
   publisher={[Publisher]}
