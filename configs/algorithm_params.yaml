@@ -1,0 +1,66 @@
+# Adaptive Scheduling Algorithm Parameters
+# Based on proportional-integral (PI) control framework
+
+adaptive_scheduler:
+  # Window duration constraints (milliseconds)
+  window:
+    min_duration_ms: 20      # W_min - minimum window duration
+    max_duration_ms: 500     # W_max - maximum window duration
+    initial_duration_ms: 100 # Starting window duration
+    
+  # PI Controller coefficients
+  controller:
+    proportional_gain: 0.8   # K_p - fast response to transient disturbances
+    integral_gain: 0.2       # K_i - eliminates steady-state error
+    
+  # Arrival rate estimation
+  arrival_estimation:
+    smoothing_alpha: 0.15    # α - exponential smoothing decay parameter
+    estimation_window_ms: 1000  # Time window for rate estimation
+    
+  # Window adjustment mechanics
+  adjustment:
+    expansion_factor: 1.25   # β - multiplicative increase factor
+    contraction_decrement_ms: 50  # Additive decrease value
+    min_interval_ms: 500     # T_adj - minimum time between adjustments
+    
+  # Stability safeguards
+  stability:
+    hysteresis_band: 0.10    # ±10% around threshold values
+    enable_monotonicity_constraint: true  # Prevent contradictory commands
+    
+  # Decision thresholds
+  thresholds:
+    # Expansion criteria
+    expansion:
+      latency_ratio: 0.7     # L_observed < 0.7 * L_target
+      cpu_utilization: 0.6   # U_cpu < 0.6
+      queue_occupancy: 0.5   # Q_depth < 0.5 * Q_max
+      
+    # Contraction criteria  
+    contraction:
+      latency_ratio: 1.2     # L_observed > 1.2 * L_target
+      cpu_utilization: 0.85  # U_cpu > 0.85
+      queue_occupancy: 0.8   # Q_depth > 0.8 * Q_max
+
+# Fixed window baseline configuration
+fixed_scheduler:
+  window_duration_ms: 100    # Static window duration
+  max_proofs_per_window: 100 # P_max - triggers early closure
+
+# Target metrics
+targets:
+  latency_ms: 150            # L_target - target latency bound
+  throughput_floor: 0.9      # Minimum acceptable throughput ratio
+
+# Queue configuration
+queue:
+  max_depth: 10000           # Q_max - maximum queue capacity
+  priority_classes: 3        # Number of priority levels
+  priority_weights: [0.5, 0.3, 0.2]  # Weight distribution
+
+# Proof window formal definition
+# W = (t_start, t_end, P_max, L_target)
+proof_window:
+  max_proof_count: 100       # P_max - triggers early window closure
+  target_latency_ms: 150     # L_target - target latency bound

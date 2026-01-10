@@ -1,0 +1,77 @@
+# Simulation Parameters Configuration
+# Adaptive Proof Window Scheduling Experiments
+
+simulation:
+  # Transaction generation
+  arrival_rates: [100, 500, 1000, 2500, 5000, 7500, 10000]  # transactions per second
+  arrival_process: "poisson"  # Poisson arrival process
+  
+  # Proof generation characteristics
+  proof_generation:
+    min_time_ms: 50      # Minimum proof generation time
+    max_time_ms: 500     # Maximum proof generation time
+    distribution: "empirical"  # Based on production network measurements
+    
+  # Trial configuration
+  trials:
+    count: 30            # Independent trials per configuration
+    transactions_per_trial: 50000  # Total transactions per trial
+    warmup_transactions: 5000      # Warm-up period (excluded from measurements)
+    
+  # Network latency modeling
+  network:
+    model: "measured_distribution"  # From geographically distributed deployments
+    min_latency_ms: 1
+    max_latency_ms: 50
+    mean_latency_ms: 10
+
+# Scheduling configurations to compare
+scheduling_modes:
+  - name: "adaptive"
+    enabled: true
+    
+  - name: "fixed_window"
+    enabled: true
+    window_duration_ms: 100
+    
+  - name: "static_batching"
+    enabled: true
+    batch_size: 100
+    
+  - name: "time_based_batching"
+    enabled: true
+    interval_ms: 100
+
+# Measurement collection
+measurements:
+  # Latency metrics
+  latency:
+    collect_mean: true
+    collect_median: true
+    collect_percentiles: [50, 90, 95, 99]
+    
+  # Throughput metrics
+  throughput:
+    window_size_seconds: 1.0
+    collect_peak: true
+    collect_sustained: true
+    
+  # Resource utilization
+  resources:
+    cpu_sampling_interval_ms: 100
+    memory_sampling_interval_ms: 500
+    buffer_sampling_interval_ms: 100
+
+# Statistical analysis parameters
+statistics:
+  confidence_level: 0.95
+  significance_threshold: 0.001  # p-value threshold
+  normality_test: "shapiro_wilk"
+  variance_test: "welch"  # Welch's t-test for unequal variances
+
+# Output configuration
+output:
+  format: "csv"
+  precision: 4  # Decimal places
+  include_raw_data: true
+  include_summary: true

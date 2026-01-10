@@ -1,0 +1,81 @@
+# Hardware and Software Environment Specifications
+# Experimental evaluation infrastructure
+
+cluster:
+  node_count: 8
+  interconnect: "100Gbps_ethernet_rdma"
+
+compute_node:
+  processor:
+    model: "AMD EPYC 7763"
+    socket_count: 2
+    cores_per_socket: 64
+    total_cores: 128
+    base_frequency_ghz: 2.45
+    boost_frequency_ghz: 3.5
+    architecture: "Zen 3"
+    
+  memory:
+    capacity_gb: 512
+    type: "DDR4-3200"
+    channels: 8
+    bandwidth_gbps: 204.8
+    
+  cache:
+    l1_per_core_kb: 64  # 32KB I + 32KB D
+    l2_per_core_mb: 0.5
+    l3_total_mb: 256
+    
+  storage:
+    type: "NVMe SSD"
+    sequential_read_mbps: 7000
+    sequential_write_mbps: 5000
+    random_iops: 1000000
+
+network:
+  bandwidth_gbps: 100
+  rdma_enabled: true
+  latency_us: 2  # Inter-node latency
+
+operating_system:
+  distribution: "Ubuntu"
+  version: "22.04 LTS"
+  kernel_version: "5.15.0"
+  
+kernel_optimizations:
+  # Scheduling optimizations
+  frequency_scaling: "disabled"  # Prevents CPU frequency variations
+  cpu_isolation: true            # Dedicated cores for proof generation
+  realtime_scheduling: true      # RT priority for verification threads
+  
+  # Memory optimizations
+  huge_pages: true               # Reduces TLB pressure
+  huge_page_size_mb: 2
+  numa_aware: true
+
+cryptographic_stack:
+  framework: "arkworks-rs"
+  version: "0.4.2"
+  
+  proving_system:
+    name: "Groth16"
+    curve: "BN254"
+    
+  finite_field:
+    montgomery_multiplication: "optimized_assembly"
+    modular_reduction: "optimized_assembly"
+    
+  pairing:
+    type: "optimal_ate"
+    optimization: "denominator_elimination"
+    
+  random_number_generator:
+    algorithm: "ChaCha20"
+    seeding: "hardware_entropy"
+    entropy_source: "/dev/urandom"
+
+# Performance tuning applied
+tuning:
+  process_priority: -20  # Highest priority (nice value)
+  thread_affinity: true  # Pin threads to cores
+  memory_locking: true   # Prevent swapping
