@@ -1,0 +1,4 @@
+# file | timestamp | command
+campaign_demo.csv | 2026-08-19 | run_campaign.py --rates 250 500 1000 1500 2000 2500 3000 --schedulers adaptive fixed adaptive_batch --trials 10 --transactions 30000 --warmup 3000
+# NOTE: demonstration run only (10 trials, 30k tx). Rerun at --trials 30
+# --transactions 50000 before any of it is reported.
