@@ -1,0 +1,54 @@
+# Every constant the manuscript reports. This file is the single source of
+# truth: the parameter table in the paper should be generated from it, and any
+# value in the paper that is not here has no provenance.
+
+pipeline:
+  prover_slots: 1024          # 8 nodes x 128 cores, from the stated hardware
+  verifier_slots: 8
+  proof_generation:
+    min_ms: 50.0
+    max_ms: 500.0
+    complexity: {distribution: lognormal, mu: 0.0, sigma: 0.5, clip: [0.5, 3.0]}
+  verification:
+    fixed_ms: 8.0             # per-batch cost, amortised over the batch
+    marginal_ms: 0.35         # per-proof cost within a batch
+  network: {min_ms: 1.0, max_ms: 50.0}
+  queue: {q_max: 10000}
+  sampling: {control_period_ms: 100.0, monitor_period_ms: 100.0,
+             latency_window_batches: 20}
+
+adaptive_window:              # supervisory-gated PI controller
+  kp: 0.8                     # dimensionless (dW and error both in ms)
+  ki: 0.2                     # s^-1
+  integral_clamp_ms_s: [-500.0, 500.0]
+  w_min_ms: 20.0
+  w_max_ms: 500.0
+  w_init_ms: 100.0
+  l_target_ms: 150.0          # see docs/FINDINGS.md section 5 before using
+  p_max: 100
+  beta: 1.25                  # multiplicative increase
+  decrement_ms: 50.0          # additive decrease
+  t_adj_ms: 500.0             # minimum adjustment interval
+  hysteresis: 0.10
+  thresholds:
+    expand:   {latency_ratio: 0.7, cpu: 0.60, queue: 0.5}   # all must hold
+    contract: {latency_ratio: 1.2, cpu: 0.85, queue: 0.8}   # any may hold
+
+fixed_window:
+  window_ms: 100.0            # sweep with scripts/sweep.py --fixed-window
+  p_max: 100
+
+adaptive_batch:               # AIMD on batch size, the size-control baseline
+  p_init: 100
+  additive: 8
+  multiplicative: 0.5
+  timeout_ms: 500.0
+
+campaign:
+  rates_txs: [250, 500, 1000, 1500, 2000, 2500, 3000]
+  workloads: [poisson, mmpp, onoff]
+  trials: 30
+  transactions_per_trial: 50000
+  warmup_transactions: 5000
+  seeds: {arrivals: trial_id, proof: trial_id+1000,
+          verify: trial_id+2000, network: trial_id+3000}
