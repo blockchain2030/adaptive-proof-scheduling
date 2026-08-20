@@ -7,12 +7,17 @@ on:
       - '.github/workflows/reviewer1-v13-stage1.yml'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   stage1:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: reviewer1-v13-tests-20260820
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -71,3 +76,10 @@ jobs:
             data/raw/stage1_*.csv
             data/processed/stage1/*.csv
           if-no-files-found: error
+      - name: Commit stage-1 results to test branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/raw/stage1_*.csv data/processed/stage1/*.csv
+          git commit -m "Add Reviewer 1 v1.3 stage-1 simulation results" || exit 0
+          git push origin HEAD:reviewer1-v13-tests-20260820
