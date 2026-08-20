@@ -5,6 +5,7 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Experimental Reviewer 1 calibration; do not merge until results are reviewed.
 jobs:
   calibrate:
     runs-on: ubuntu-latest
