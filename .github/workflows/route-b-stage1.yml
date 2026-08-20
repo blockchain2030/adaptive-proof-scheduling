@@ -1,11 +1,11 @@
-name: Route B calibration
+name: Route B recalibration
 
 on:
   pull_request:
     branches: [main]
 
 jobs:
-  calibrate:
+  recalibrate:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -14,30 +14,29 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install tabulate
+        run: pip install -r requirements.txt
       - name: Syntax check
         run: |
-          python -m py_compile src/pipeline_route_b.py scripts/route_b_experiment.py scripts/route_b_summarize.py
-      - name: Smoke test
+          python -m py_compile src/route_b_scheduler.py scripts/route_b_recalibrate.py src/pipeline_route_b.py
+      - name: Feedback-ready latency-target sweep
         run: |
-          python scripts/route_b_experiment.py smoke --trials 3 --transactions 10000 --warmup 1000 --l-target 240 --out data/route_b/stage1_smoke.csv
-      - name: Fixed-window sweep
+          python scripts/route_b_recalibrate.py target-sweep \
+            --trials 5 --transactions 20000 --warmup 2000 --trial-offset 10 \
+            --out data/route_b/recal_target_sweep.csv
+      - name: Controller target and Kp calibration grid
         run: |
-          python scripts/route_b_experiment.py window-sweep --trials 5 --transactions 20000 --warmup 2000 --l-target 240 --out data/route_b/stage1_window_sweep.csv
-      - name: Latency-target sweep
+          python scripts/route_b_recalibrate.py controller-grid \
+            --trials 5 --transactions 20000 --warmup 2000 --trial-offset 20 \
+            --out data/route_b/recal_controller_grid.csv
+      - name: Corrected gain sensitivity at target 220 ms
         run: |
-          python scripts/route_b_experiment.py target-sweep --trials 5 --transactions 20000 --warmup 2000 --out data/route_b/stage1_target_sweep.csv
-      - name: Gain sensitivity at provisional target 240 ms
-        run: |
-          python scripts/route_b_experiment.py gain-sensitivity --trials 5 --transactions 20000 --warmup 2000 --l-target 240 --out data/route_b/stage1_gain_sensitivity.csv
-      - name: Summarize calibration
-        run: |
-          python scripts/route_b_summarize.py --smoke data/route_b/stage1_smoke.csv --window data/route_b/stage1_window_sweep.csv --target data/route_b/stage1_target_sweep.csv --gains data/route_b/stage1_gain_sensitivity.csv --out data/route_b/STAGE1_SUMMARY.md
-      - name: Upload calibration artifact
+          python scripts/route_b_recalibrate.py gain-sensitivity \
+            --trials 5 --transactions 20000 --warmup 2000 --trial-offset 30 \
+            --l-target 220 --kp 0.8 \
+            --out data/route_b/recal_gain_sensitivity_220.csv
+      - name: Upload recalibration artifact
         uses: actions/upload-artifact@v4
         with:
-          name: route-b-stage1
+          name: route-b-recalibration
           path: data/route_b/
           if-no-files-found: error
