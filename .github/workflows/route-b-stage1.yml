@@ -1,11 +1,11 @@
-name: Route B recalibration
+name: Route B final validation
 
 on:
   pull_request:
     branches: [main]
 
 jobs:
-  recalibrate:
+  poisson:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -15,28 +15,70 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: pip install -r requirements.txt
-      - name: Syntax check
+      - name: Final 30-trial Poisson campaign
         run: |
-          python -m py_compile src/route_b_scheduler.py scripts/route_b_recalibrate.py src/pipeline_route_b.py
-      - name: Feedback-ready latency-target sweep
+          python scripts/route_b_recalibrate.py campaign \
+            --rates 250 500 1000 1500 2000 2500 3000 \
+            --trials 30 --transactions 50000 --warmup 5000 --trial-offset 100 \
+            --l-target 260 --kp 0.8 \
+            --out data/route_b/final_poisson_30x50000.csv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: route-b-final-poisson
+          path: data/route_b/final_poisson_30x50000.csv
+          if-no-files-found: error
+
+  bursty:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Final 30-trial MMPP and on-off campaign
         run: |
-          python scripts/route_b_recalibrate.py target-sweep \
-            --trials 5 --transactions 20000 --warmup 2000 --trial-offset 10 \
-            --out data/route_b/recal_target_sweep.csv
-      - name: Controller target and Kp calibration grid
-        run: |
-          python scripts/route_b_recalibrate.py controller-grid \
-            --trials 5 --transactions 20000 --warmup 2000 --trial-offset 20 \
-            --out data/route_b/recal_controller_grid.csv
-      - name: Corrected gain sensitivity at target 220 ms
+          python scripts/route_b_recalibrate.py bursty \
+            --rates 500 1500 3000 \
+            --trials 30 --transactions 50000 --warmup 5000 --trial-offset 200 \
+            --l-target 260 --kp 0.8 \
+            --out data/route_b/final_bursty_30x50000.csv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: route-b-final-bursty
+          path: data/route_b/final_bursty_30x50000.csv
+          if-no-files-found: error
+
+  diagnostics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Gain sensitivity at final target
         run: |
           python scripts/route_b_recalibrate.py gain-sensitivity \
-            --trials 5 --transactions 20000 --warmup 2000 --trial-offset 30 \
-            --l-target 220 --kp 0.8 \
-            --out data/route_b/recal_gain_sensitivity_220.csv
-      - name: Upload recalibration artifact
-        uses: actions/upload-artifact@v4
+            --rates 500 1500 3000 \
+            --trials 10 --transactions 20000 --warmup 2000 --trial-offset 300 \
+            --l-target 260 --kp 0.8 \
+            --out data/route_b/final_gain_sensitivity_260.csv
+      - name: Overload and saturation probe
+        run: |
+          python scripts/route_b_recalibrate.py campaign \
+            --rates 3250 3500 3750 4000 4250 4500 5000 7500 10000 \
+            --trials 10 --transactions 50000 --warmup 5000 --trial-offset 400 \
+            --l-target 260 --kp 0.8 --fixed-window 40 \
+            --out data/route_b/final_overload_probe.csv
+      - uses: actions/upload-artifact@v4
         with:
-          name: route-b-recalibration
-          path: data/route_b/
+          name: route-b-final-diagnostics
+          path: |
+            data/route_b/final_gain_sensitivity_260.csv
+            data/route_b/final_overload_probe.csv
           if-no-files-found: error
