@@ -3,9 +3,7 @@ name: Route B calibration
 on:
   pull_request:
     branches: [main]
-  workflow_dispatch:
 
-# Experimental Reviewer 1 calibration; do not merge until results are reviewed.
 jobs:
   calibrate:
     runs-on: ubuntu-latest
@@ -24,32 +22,19 @@ jobs:
           python -m py_compile src/pipeline_route_b.py scripts/route_b_experiment.py scripts/route_b_summarize.py
       - name: Smoke test
         run: |
-          python scripts/route_b_experiment.py smoke \
-            --trials 3 --transactions 10000 --warmup 1000 --l-target 240 \
-            --out data/route_b/stage1_smoke.csv
+          python scripts/route_b_experiment.py smoke --trials 3 --transactions 10000 --warmup 1000 --l-target 240 --out data/route_b/stage1_smoke.csv
       - name: Fixed-window sweep
         run: |
-          python scripts/route_b_experiment.py window-sweep \
-            --trials 5 --transactions 20000 --warmup 2000 --l-target 240 \
-            --out data/route_b/stage1_window_sweep.csv
+          python scripts/route_b_experiment.py window-sweep --trials 5 --transactions 20000 --warmup 2000 --l-target 240 --out data/route_b/stage1_window_sweep.csv
       - name: Latency-target sweep
         run: |
-          python scripts/route_b_experiment.py target-sweep \
-            --trials 5 --transactions 20000 --warmup 2000 \
-            --out data/route_b/stage1_target_sweep.csv
+          python scripts/route_b_experiment.py target-sweep --trials 5 --transactions 20000 --warmup 2000 --out data/route_b/stage1_target_sweep.csv
       - name: Gain sensitivity at provisional target 240 ms
         run: |
-          python scripts/route_b_experiment.py gain-sensitivity \
-            --trials 5 --transactions 20000 --warmup 2000 --l-target 240 \
-            --out data/route_b/stage1_gain_sensitivity.csv
+          python scripts/route_b_experiment.py gain-sensitivity --trials 5 --transactions 20000 --warmup 2000 --l-target 240 --out data/route_b/stage1_gain_sensitivity.csv
       - name: Summarize calibration
         run: |
-          python scripts/route_b_summarize.py \
-            --smoke data/route_b/stage1_smoke.csv \
-            --window data/route_b/stage1_window_sweep.csv \
-            --target data/route_b/stage1_target_sweep.csv \
-            --gains data/route_b/stage1_gain_sensitivity.csv \
-            --out data/route_b/STAGE1_SUMMARY.md
+          python scripts/route_b_summarize.py --smoke data/route_b/stage1_smoke.csv --window data/route_b/stage1_window_sweep.csv --target data/route_b/stage1_target_sweep.csv --gains data/route_b/stage1_gain_sensitivity.csv --out data/route_b/STAGE1_SUMMARY.md
       - name: Upload calibration artifact
         uses: actions/upload-artifact@v4
         with:
