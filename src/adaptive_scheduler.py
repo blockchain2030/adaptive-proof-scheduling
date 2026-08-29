@@ -1,379 +1,449 @@
 """
-Adaptive Proof Window Scheduler
+Adaptive Proof-Window Scheduler — manuscript-aligned implementation
 
-Implements the proportional-integral (PI) control-based adaptive window
-scheduling algorithm for continuous zero-knowledge proof transfer.
+Implements the supervisory-gated PI controller described in Algorithm 1 of the
+current manuscript revision.
 
-Reference: Shahid et al., "Adaptive Proof Window Scheduling for Continuous
-Zero Knowledge Proof Transfer"
+Key properties:
+- Window duration W[k] is the only actuator.
+- Feedback uses mean completed-batch latency, modelled prover utilization,
+  and normalized aggregation-buffer occupancy.
+- No arrival-rate or proof-size feed-forward term.
+- Conditional integration and integral clamping for anti-windup.
+- Stateful hysteresis for expand/contract supervision.
+- Multiplicative increase and additive decrease retained as evaluated.
+- Simulation time is supplied by the caller; wall-clock time is not used.
+
+Units:
+- window duration and latency: milliseconds
+- T_c and T_adj: seconds
+- K_p: dimensionless
+- K_i: 1/second
+- integral state: millisecond-seconds
 """
 
-import time
-import threading
-from dataclasses import dataclass, field
-from typing import List, Optional, Callable
+from __future__ import annotations
+
 from collections import deque
-import numpy as np
+from dataclasses import dataclass, field
+from typing import Deque, List, Optional
+import math
+
+
+def clamp(value: float, lower: float, upper: float) -> float:
+    """Clamp value to [lower, upper]."""
+    return max(lower, min(upper, value))
 
 
 @dataclass
 class ProofWindow:
-    """
-    Proof window definition: W = (t_start, t_end, P_max, L_target)
-    
-    Attributes:
-        t_start: Window start timestamp
-        t_end: Window end timestamp  
-        p_max: Maximum proof count triggering early closure
-        l_target: Target latency bound for window transactions
-    """
+    """One aggregation window expressed in simulation time."""
     t_start: float
     t_end: float
     p_max: int
-    l_target: float
-    proofs: List = field(default_factory=list)
-    
+    l_target_ms: float
+    transactions: List[object] = field(default_factory=list)
+
     @property
-    def duration(self) -> float:
-        """Window duration in milliseconds"""
-        return (self.t_end - self.t_start) * 1000
-    
+    def duration_ms(self) -> float:
+        return (self.t_end - self.t_start) * 1000.0
+
     @property
     def is_full(self) -> bool:
-        """Check if proof count threshold reached"""
-        return len(self.proofs) >= self.p_max
+        return len(self.transactions) >= self.p_max
 
 
 @dataclass
-class SystemMetrics:
-    """Real-time system metrics for scheduling decisions"""
-    arrival_rate: float = 0.0        # λ(t) - transaction arrival rate
-    verification_delay: float = 0.0  # δ(t) - verification delay
-    proof_size_growth: float = 0.0   # γ(t) - proof size growth rate
-    cpu_utilization: float = 0.0     # U_cpu
-    queue_depth: float = 0.0         # Q_depth
-    observed_latency: float = 0.0    # L_observed
+class ControllerObservation:
+    mean_completed_batch_latency_ms: Optional[float]
+    prover_utilization: float
+    aggregation_queue_depth: int
+    aggregation_queue_occupancy: float
+
+
+@dataclass
+class ControllerDecision:
+    now_s: float
+    previous_window_ms: float
+    new_window_ms: float
+    error_ms: Optional[float]
+    integral_ms_s: float
+    dW_pi_ms: Optional[float]
+    applied_dW_ms: float
+    expand: bool
+    contract: bool
+    acting: bool
+    at_limit: bool
+    startup_guard: bool
+    adjustment_interval_guard: bool
+    mean_latency_ms: Optional[float]
+    prover_utilization: float
+    queue_occupancy: float
 
 
 class AdaptiveScheduler:
-    """
-    Adaptive proof window scheduler using PI control.
-    
-    The controller adjusts window duration based on the control law:
-    ΔW = K_p · (L_target - L_observed) + K_i · ∫(L_target - L_observed)dt
-    """
-    
+    """Supervisory-gated proportional-integral proof-window controller."""
+
     def __init__(
         self,
-        # PI controller coefficients
+        *,
         k_p: float = 0.8,
-        k_i: float = 0.2,
-        # Window constraints
-        w_min: float = 20.0,    # Minimum window duration (ms)
-        w_max: float = 500.0,   # Maximum window duration (ms)
-        # Target metrics
-        l_target: float = 150.0,  # Target latency (ms)
-        p_max: int = 100,         # Max proofs per window
-        # Adjustment parameters
-        expansion_factor: float = 1.25,
-        contraction_decrement: float = 50.0,
-        min_adjustment_interval: float = 500.0,
-        # Stability safeguards
-        hysteresis_band: float = 0.10,
-        # Arrival rate estimation
-        smoothing_alpha: float = 0.15,
-        # Queue parameters
-        q_max: int = 10000,
-    ):
-        # Controller parameters
-        self.k_p = k_p
-        self.k_i = k_i
-        
-        # Window constraints
-        self.w_min = w_min
-        self.w_max = w_max
-        self.current_window_duration = 100.0  # Initial duration
-        
-        # Targets
-        self.l_target = l_target
-        self.p_max = p_max
-        
-        # Adjustment parameters
-        self.expansion_factor = expansion_factor
-        self.contraction_decrement = contraction_decrement
-        self.min_adjustment_interval = min_adjustment_interval
-        self.hysteresis_band = hysteresis_band
-        
-        # Arrival rate estimation
-        self.smoothing_alpha = smoothing_alpha
-        
-        # Queue
-        self.q_max = q_max
-        
-        # State tracking
-        self.integral_error = 0.0
-        self.last_adjustment_time = 0.0
-        self.arrival_times: deque = deque(maxlen=1000)
-        self.latency_history: deque = deque(maxlen=100)
-        
-        # Current window
+        k_i_per_s: float = 0.2,
+        w_min_ms: float = 20.0,
+        w_max_ms: float = 500.0,
+        w_init_ms: float = 100.0,
+        l_target_ms: float = 260.0,
+        p_max: int = 100,
+        q_max: int = 10_000,
+        beta: float = 1.25,
+        delta_dec_ms: float = 50.0,
+        control_period_s: float = 0.100,
+        min_adjustment_interval_s: float = 0.500,
+        hysteresis_half_width: float = 0.10,
+        n_latency_batches: int = 20,
+        i_min_ms_s: float = -500.0,
+        i_max_ms_s: float = 500.0,
+        expand_latency_ratio: float = 0.70,
+        expand_utilization: float = 0.60,
+        expand_queue_occupancy: float = 0.50,
+        contract_latency_ratio: float = 1.20,
+        contract_utilization: float = 0.85,
+        contract_queue_occupancy: float = 0.80,
+    ) -> None:
+        if not (0.0 < w_min_ms <= w_init_ms <= w_max_ms):
+            raise ValueError("Require 0 < W_min <= W_init <= W_max.")
+        if l_target_ms <= 0:
+            raise ValueError("L_target must be positive.")
+        if p_max <= 0 or q_max <= 0:
+            raise ValueError("P_max and Q_max must be positive.")
+        if beta < 1.0:
+            raise ValueError("beta must be >= 1.")
+        if delta_dec_ms < 0:
+            raise ValueError("delta_dec_ms must be non-negative.")
+        if control_period_s <= 0 or min_adjustment_interval_s <= 0:
+            raise ValueError("Control timing values must be positive.")
+        if min_adjustment_interval_s < control_period_s:
+            raise ValueError("T_adj must be >= T_c.")
+        if not (0.0 <= hysteresis_half_width < 1.0):
+            raise ValueError("hysteresis_half_width must be in [0, 1).")
+        if n_latency_batches <= 0:
+            raise ValueError("n_latency_batches must be positive.")
+        if i_min_ms_s > i_max_ms_s:
+            raise ValueError("I_min must be <= I_max.")
+
+        self.k_p = float(k_p)
+        self.k_i_per_s = float(k_i_per_s)
+        self.w_min_ms = float(w_min_ms)
+        self.w_max_ms = float(w_max_ms)
+        self.current_window_ms = float(w_init_ms)
+        self.l_target_ms = float(l_target_ms)
+        self.p_max = int(p_max)
+        self.q_max = int(q_max)
+        self.beta = float(beta)
+        self.delta_dec_ms = float(delta_dec_ms)
+        self.control_period_s = float(control_period_s)
+        self.min_adjustment_interval_s = float(min_adjustment_interval_s)
+        self.h = float(hysteresis_half_width)
+        self.n_latency_batches = int(n_latency_batches)
+        self.i_min_ms_s = float(i_min_ms_s)
+        self.i_max_ms_s = float(i_max_ms_s)
+        self.integral_ms_s = 0.0
+
+        self.expand_latency_ratio = float(expand_latency_ratio)
+        self.expand_utilization = float(expand_utilization)
+        self.expand_queue_occupancy = float(expand_queue_occupancy)
+        self.contract_latency_ratio = float(contract_latency_ratio)
+        self.contract_utilization = float(contract_utilization)
+        self.contract_queue_occupancy = float(contract_queue_occupancy)
+
+        self.expanding = False
+        self.contracting = False
+        self.last_adjust_s = -math.inf
+        self.completed_batch_latencies_ms: Deque[float] = deque(maxlen=self.n_latency_batches)
         self.current_window: Optional[ProofWindow] = None
-        
-        # Metrics
-        self.metrics = SystemMetrics()
-        
-        # Thread safety
-        self._lock = threading.Lock()
-        
-        # Decision thresholds
-        self.expansion_thresholds = {
-            'latency_ratio': 0.7,
-            'cpu_utilization': 0.6,
-            'queue_occupancy': 0.5,
-        }
-        self.contraction_thresholds = {
-            'latency_ratio': 1.2,
-            'cpu_utilization': 0.85,
-            'queue_occupancy': 0.8,
-        }
-        
-    def estimate_arrival_rate(self) -> float:
-        """
-        Estimate instantaneous transaction arrival rate using
-        exponential smoothing with decay parameter α = 0.15
-        """
-        if len(self.arrival_times) < 2:
-            return 0.0
-            
-        # Calculate inter-arrival times
-        times = list(self.arrival_times)
-        inter_arrivals = np.diff(times)
-        
-        if len(inter_arrivals) == 0:
-            return 0.0
-            
-        # Exponential smoothing
-        smoothed_rate = 0.0
-        weight = 1.0
-        total_weight = 0.0
-        
-        for interval in reversed(inter_arrivals):
-            if interval > 0:
-                rate = 1.0 / interval
-                smoothed_rate += weight * rate
-                total_weight += weight
-                weight *= (1 - self.smoothing_alpha)
-                
-        return smoothed_rate / total_weight if total_weight > 0 else 0.0
-    
-    def calculate_window_adjustment(self) -> float:
-        """
-        Calculate window duration adjustment using PI control law:
-        ΔW = K_p · (L_target - L_observed) + K_i · ∫(L_target - L_observed)dt
-        """
-        error = self.l_target - self.metrics.observed_latency
-        
-        # Proportional term: fast response to transient disturbances
-        p_term = self.k_p * error
-        
-        # Integral term: eliminates steady-state error
-        self.integral_error += error
-        i_term = self.k_i * self.integral_error
-        
-        return p_term + i_term
-    
-    def should_expand(self) -> bool:
-        """
-        Evaluate expansion criterion:
-        EXPAND if (L_observed < 0.7 · L_target) AND 
-                  (U_cpu < 0.6) AND 
-                  (Q_depth < 0.5 · Q_max)
-        """
-        latency_ok = (self.metrics.observed_latency < 
-                      self.expansion_thresholds['latency_ratio'] * self.l_target)
-        cpu_ok = (self.metrics.cpu_utilization < 
-                  self.expansion_thresholds['cpu_utilization'])
-        queue_ok = (self.metrics.queue_depth < 
-                    self.expansion_thresholds['queue_occupancy'] * self.q_max)
-        
-        return latency_ok and cpu_ok and queue_ok
-    
-    def should_contract(self) -> bool:
-        """
-        Evaluate contraction criterion:
-        CONTRACT if (L_observed > 1.2 · L_target) OR 
-                   (U_cpu > 0.85) OR 
-                   (Q_depth > 0.8 · Q_max)
-        """
-        latency_violation = (self.metrics.observed_latency > 
-                            self.contraction_thresholds['latency_ratio'] * self.l_target)
-        cpu_saturation = (self.metrics.cpu_utilization > 
-                         self.contraction_thresholds['cpu_utilization'])
-        queue_full = (self.metrics.queue_depth > 
-                     self.contraction_thresholds['queue_occupancy'] * self.q_max)
-        
-        return latency_violation or cpu_saturation or queue_full
-    
-    def apply_hysteresis(self, value: float, threshold: float, 
-                         previous_state: bool) -> bool:
-        """
-        Apply hysteresis band (±10%) to prevent chattering at decision boundaries
-        """
-        upper = threshold * (1 + self.hysteresis_band)
-        lower = threshold * (1 - self.hysteresis_band)
-        
-        if previous_state:
-            return value > lower  # Stay in state until below lower threshold
+        self.decision_history: List[ControllerDecision] = []
+
+    def record_completed_batch_latency(self, latency_ms: float) -> None:
+        latency_ms = float(latency_ms)
+        if math.isfinite(latency_ms) and latency_ms > 0.0:
+            self.completed_batch_latencies_ms.append(latency_ms)
+
+    def mean_completed_batch_latency_ms(self) -> Optional[float]:
+        if not self.completed_batch_latencies_ms:
+            return None
+        return sum(self.completed_batch_latencies_ms) / len(self.completed_batch_latencies_ms)
+
+    def observe(self, *, prover_utilization: float, aggregation_queue_depth: int) -> ControllerObservation:
+        u = clamp(float(prover_utilization), 0.0, 1.0)
+        q_depth = max(0, int(aggregation_queue_depth))
+        q = clamp(q_depth / self.q_max, 0.0, 1.0)
+        return ControllerObservation(
+            mean_completed_batch_latency_ms=self.mean_completed_batch_latency_ms(),
+            prover_utilization=u,
+            aggregation_queue_depth=q_depth,
+            aggregation_queue_occupancy=q,
+        )
+
+    def _expand_gate(self, latency_ms: float, u: float, q: float) -> bool:
+        if self.expanding:
+            return (
+                latency_ms < self.expand_latency_ratio * self.l_target_ms * (1.0 + self.h)
+                and u < self.expand_utilization * (1.0 + self.h)
+                and q < self.expand_queue_occupancy * (1.0 + self.h)
+            )
+        return (
+            latency_ms < self.expand_latency_ratio * self.l_target_ms
+            and u < self.expand_utilization
+            and q < self.expand_queue_occupancy
+        )
+
+    def _contract_gate(self, latency_ms: float, u: float, q: float) -> bool:
+        if self.contracting:
+            return (
+                latency_ms > self.contract_latency_ratio * self.l_target_ms * (1.0 - self.h)
+                or u > self.contract_utilization * (1.0 - self.h)
+                or q > self.contract_queue_occupancy * (1.0 - self.h)
+            )
+        return (
+            latency_ms > self.contract_latency_ratio * self.l_target_ms
+            or u > self.contract_utilization
+            or q > self.contract_queue_occupancy
+        )
+
+    def _gate(self, latency_ms: float, u: float, q: float) -> tuple[bool, bool]:
+        expand = self._expand_gate(latency_ms, u, q)
+        contract = self._contract_gate(latency_ms, u, q)
+        if expand and contract:
+            expand = False  # contraction wins
+        self.expanding = bool(expand)
+        self.contracting = bool(contract)
+        return expand, contract
+
+    def control_step(
+        self,
+        *,
+        now_s: float,
+        prover_utilization: float,
+        aggregation_queue_depth: int,
+    ) -> ControllerDecision:
+        """Execute one control evaluation at simulation time now_s."""
+        now_s = float(now_s)
+        previous_w = self.current_window_ms
+        obs = self.observe(
+            prover_utilization=prover_utilization,
+            aggregation_queue_depth=aggregation_queue_depth,
+        )
+
+        # Algorithm 1 line 1: T_adj guard.
+        if (now_s - self.last_adjust_s) < self.min_adjustment_interval_s:
+            decision = ControllerDecision(
+                now_s, previous_w, self.current_window_ms, None,
+                self.integral_ms_s, None, 0.0,
+                self.expanding, self.contracting, False, False,
+                False, True,
+                obs.mean_completed_batch_latency_ms,
+                obs.prover_utilization,
+                obs.aggregation_queue_occupancy,
+            )
+            self.decision_history.append(decision)
+            return decision
+
+        # Algorithm 1 lines 2-3: startup guard.
+        l_bar = obs.mean_completed_batch_latency_ms
+        if l_bar is None or l_bar <= 0.0 or not math.isfinite(l_bar):
+            decision = ControllerDecision(
+                now_s, previous_w, self.current_window_ms, None,
+                self.integral_ms_s, None, 0.0,
+                False, False, False, False,
+                True, False,
+                l_bar, obs.prover_utilization, obs.aggregation_queue_occupancy,
+            )
+            self.decision_history.append(decision)
+            return decision
+
+        u = obs.prover_utilization
+        q = obs.aggregation_queue_occupancy
+        error_ms = self.l_target_ms - l_bar
+
+        # Algorithm 1 lines 7-9.
+        expand, contract = self._gate(l_bar, u, q)
+        acting = expand or contract
+
+        # Algorithm 1 line 10.
+        at_limit = (
+            (previous_w >= self.w_max_ms and error_ms > 0.0)
+            or (previous_w <= self.w_min_ms and error_ms <= 0.0)
+        )
+
+        # Algorithm 1 lines 11-13: conditional integration.
+        if acting and not at_limit:
+            self.integral_ms_s = clamp(
+                self.integral_ms_s + error_ms * self.control_period_s,
+                self.i_min_ms_s,
+                self.i_max_ms_s,
+            )
+
+        # Algorithm 1 line 14.
+        dW_pi_ms = self.k_p * error_ms + self.k_i_per_s * self.integral_ms_s
+
+        # Algorithm 1 lines 15-17.
+        if contract:
+            applied_dW_ms = -min(self.delta_dec_ms, abs(dW_pi_ms))
+        elif expand:
+            applied_dW_ms = min((self.beta - 1.0) * previous_w, abs(dW_pi_ms))
         else:
-            return value > upper  # Enter state only above upper threshold
-    
-    def adjust_window_duration(self, current_time: float) -> None:
-        """
-        Adjust window duration based on system state.
-        
-        Implements:
-        - Multiplicative increase (β = 1.25) for expansion
-        - Additive decrease (50ms) for contraction
-        - Minimum adjustment interval (T_adj = 500ms)
-        - Monotonicity constraints during transient periods
-        """
-        with self._lock:
-            # Check minimum adjustment interval
-            if (current_time - self.last_adjustment_time) * 1000 < self.min_adjustment_interval:
-                return
-            
-            # Determine action
-            expand = self.should_expand()
-            contract = self.should_contract()
-            
-            # Monotonicity constraint: prevent contradictory commands
-            if expand and contract:
-                return  # No action during conflicting signals
-            
-            if expand:
-                # Multiplicative increase
-                new_duration = self.current_window_duration * self.expansion_factor
-            elif contract:
-                # Additive decrease
-                new_duration = self.current_window_duration - self.contraction_decrement
-            else:
-                return  # No adjustment needed
-            
-            # Apply constraints
-            self.current_window_duration = np.clip(new_duration, self.w_min, self.w_max)
-            self.last_adjustment_time = current_time
-    
-    def update_metrics(self, cpu_util: float, queue_depth: int, 
-                       latest_latency: float) -> None:
-        """Update system metrics for scheduling decisions"""
-        with self._lock:
-            self.metrics.cpu_utilization = cpu_util
-            self.metrics.queue_depth = queue_depth
-            self.metrics.arrival_rate = self.estimate_arrival_rate()
-            
-            # Update latency with smoothing
-            self.latency_history.append(latest_latency)
-            if len(self.latency_history) > 0:
-                self.metrics.observed_latency = np.mean(list(self.latency_history))
-    
-    def record_arrival(self, timestamp: float) -> None:
-        """Record transaction arrival for rate estimation"""
-        self.arrival_times.append(timestamp)
-    
-    def create_window(self) -> ProofWindow:
-        """Create a new proof window with current parameters"""
-        t_start = time.time()
-        t_end = t_start + (self.current_window_duration / 1000.0)
-        
+            applied_dW_ms = 0.0
+
+        # Algorithm 1 line 18.
+        self.current_window_ms = clamp(
+            previous_w + applied_dW_ms,
+            self.w_min_ms,
+            self.w_max_ms,
+        )
+
+        # Algorithm 1 line 19.
+        self.last_adjust_s = now_s
+
+        decision = ControllerDecision(
+            now_s=now_s,
+            previous_window_ms=previous_w,
+            new_window_ms=self.current_window_ms,
+            error_ms=error_ms,
+            integral_ms_s=self.integral_ms_s,
+            dW_pi_ms=dW_pi_ms,
+            applied_dW_ms=applied_dW_ms,
+            expand=expand,
+            contract=contract,
+            acting=acting,
+            at_limit=at_limit,
+            startup_guard=False,
+            adjustment_interval_guard=False,
+            mean_latency_ms=l_bar,
+            prover_utilization=u,
+            queue_occupancy=q,
+        )
+        self.decision_history.append(decision)
+        return decision
+
+    def create_window(self, *, now_s: float) -> ProofWindow:
+        now_s = float(now_s)
         self.current_window = ProofWindow(
-            t_start=t_start,
-            t_end=t_end,
+            t_start=now_s,
+            t_end=now_s + self.current_window_ms / 1000.0,
             p_max=self.p_max,
-            l_target=self.l_target
+            l_target_ms=self.l_target_ms,
         )
         return self.current_window
-    
-    def should_close_window(self) -> bool:
-        """Check if current window should be closed"""
+
+    def should_close_window(self, *, now_s: float) -> bool:
         if self.current_window is None:
             return False
-            
-        current_time = time.time()
-        
-        # Close if time exceeded or proof count reached
-        time_exceeded = current_time >= self.current_window.t_end
-        count_reached = self.current_window.is_full
-        
-        return time_exceeded or count_reached
-    
-    def get_statistics(self) -> dict:
-        """Return current scheduler statistics"""
+        return float(now_s) >= self.current_window.t_end or self.current_window.is_full
+
+    def add_to_current_window(self, transaction: object) -> None:
+        if self.current_window is None:
+            raise RuntimeError("No current window. Call create_window() first.")
+        self.current_window.transactions.append(transaction)
+
+    def reset(
+        self,
+        *,
+        w_init_ms: float = 100.0,
+        clear_latency_history: bool = True,
+        clear_decision_history: bool = True,
+    ) -> None:
+        if not (self.w_min_ms <= w_init_ms <= self.w_max_ms):
+            raise ValueError("w_init_ms is outside actuator limits.")
+        self.current_window_ms = float(w_init_ms)
+        self.integral_ms_s = 0.0
+        self.expanding = False
+        self.contracting = False
+        self.last_adjust_s = -math.inf
+        self.current_window = None
+        if clear_latency_history:
+            self.completed_batch_latencies_ms.clear()
+        if clear_decision_history:
+            self.decision_history.clear()
+
+    def get_state(self) -> dict:
         return {
-            'window_duration_ms': self.current_window_duration,
-            'arrival_rate': self.metrics.arrival_rate,
-            'observed_latency_ms': self.metrics.observed_latency,
-            'cpu_utilization': self.metrics.cpu_utilization,
-            'queue_depth': self.metrics.queue_depth,
-            'integral_error': self.integral_error,
+            "window_duration_ms": self.current_window_ms,
+            "integral_ms_s": self.integral_ms_s,
+            "expanding": self.expanding,
+            "contracting": self.contracting,
+            "last_adjust_s": self.last_adjust_s,
+            "mean_completed_batch_latency_ms": self.mean_completed_batch_latency_ms(),
+            "l_target_ms": self.l_target_ms,
+            "k_p": self.k_p,
+            "k_i_per_s": self.k_i_per_s,
+            "beta": self.beta,
+            "delta_dec_ms": self.delta_dec_ms,
+            "w_min_ms": self.w_min_ms,
+            "w_max_ms": self.w_max_ms,
+            "control_period_s": self.control_period_s,
+            "min_adjustment_interval_s": self.min_adjustment_interval_s,
+            "q_max": self.q_max,
+            "p_max": self.p_max,
         }
 
 
 class FixedWindowScheduler:
-    """
-    Fixed window scheduler baseline for comparison.
-    Uses static temporal boundaries regardless of system state.
-    """
-    
+    """Static-window baseline with the same P_max early-closure rule."""
+
     def __init__(
         self,
-        window_duration: float = 100.0,  # Fixed duration (ms)
+        *,
+        window_duration_ms: float = 100.0,
         p_max: int = 100,
-        l_target: float = 150.0,
-    ):
-        self.window_duration = window_duration
-        self.p_max = p_max
-        self.l_target = l_target
+        l_target_ms: float = 260.0,
+    ) -> None:
+        if window_duration_ms <= 0:
+            raise ValueError("window_duration_ms must be positive.")
+        if p_max <= 0:
+            raise ValueError("p_max must be positive.")
+        self.window_duration_ms = float(window_duration_ms)
+        self.p_max = int(p_max)
+        self.l_target_ms = float(l_target_ms)
         self.current_window: Optional[ProofWindow] = None
-    
-    def create_window(self) -> ProofWindow:
-        """Create a new fixed-duration window"""
-        t_start = time.time()
-        t_end = t_start + (self.window_duration / 1000.0)
-        
+
+    def create_window(self, *, now_s: float) -> ProofWindow:
+        now_s = float(now_s)
         self.current_window = ProofWindow(
-            t_start=t_start,
-            t_end=t_end,
+            t_start=now_s,
+            t_end=now_s + self.window_duration_ms / 1000.0,
             p_max=self.p_max,
-            l_target=self.l_target
+            l_target_ms=self.l_target_ms,
         )
         return self.current_window
-    
-    def should_close_window(self) -> bool:
-        """Check if current window should be closed"""
+
+    def should_close_window(self, *, now_s: float) -> bool:
         if self.current_window is None:
             return False
-            
-        current_time = time.time()
-        return (current_time >= self.current_window.t_end or 
-                self.current_window.is_full)
+        return float(now_s) >= self.current_window.t_end or self.current_window.is_full
+
+    def add_to_current_window(self, transaction: object) -> None:
+        if self.current_window is None:
+            raise RuntimeError("No current window. Call create_window() first.")
+        self.current_window.transactions.append(transaction)
 
 
 if __name__ == "__main__":
-    # Example usage
-    scheduler = AdaptiveScheduler(
-        k_p=0.8,
-        k_i=0.2,
-        l_target=150.0,
-        p_max=100,
-    )
-    
-    # Create initial window
-    window = scheduler.create_window()
-    print(f"Created window with duration: {window.duration:.2f}ms")
-    
-    # Simulate metrics update
-    scheduler.update_metrics(cpu_util=0.5, queue_depth=100, latest_latency=120.0)
-    
-    # Get statistics
-    stats = scheduler.get_statistics()
-    print(f"Scheduler statistics: {stats}")
+    scheduler = AdaptiveScheduler()
+
+    # Startup guard: no completed-batch latency yet.
+    print(scheduler.control_step(
+        now_s=0.0,
+        prover_utilization=0.25,
+        aggregation_queue_depth=0,
+    ))
+
+    # Supply N_b valid completed-batch observations.
+    for _ in range(20):
+        scheduler.record_completed_batch_latency(180.0)
+
+    print(scheduler.control_step(
+        now_s=0.5,
+        prover_utilization=0.30,
+        aggregation_queue_depth=100,
+    ))
+    print(scheduler.get_state())
