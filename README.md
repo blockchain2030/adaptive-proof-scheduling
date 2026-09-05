@@ -1,181 +1,73 @@
-# Adaptive Proof Window Scheduling for Continuous Zero-Knowledge Proof Transfer
+# Adaptive Proof Scheduling
 
-![License](https://img.shields.io/badge/License-Academic%20Research-lightgrey.svg)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+![License](https://img.shields.io/badge/license-BSD%203--Clause-lightgrey.svg)
 
 ## Overview
 
-This repository contains the simulation code, experimental parameters, and datasets for the research:
+A reproducible discrete-event simulation toolkit for evaluating aggregation-window scheduling in zero-knowledge proof pipelines. It supports fixed and adaptive schedulers, multiple workload models, parameter sweeps, and statistical analysis of latency, served rate, batch size, queueing, admission, and resource metrics.
 
-> **Adaptive Proof Window Scheduling for Continuous Zero Knowledge Proof Transfer**  
-> Muhammad Shahid, Suziyanti Marjudi, Abd Samad Hasan Basari  
-> Universiti Tun Hussein Onn Malaysia (UTHM)
-
-The adaptive proof window scheduling mechanism optimizes zero-knowledge proof generation and verification in blockchain networks, achieving:
-- **34.7%** reduction in verification latency
-- **28.3%** improvement in throughput
-- **19.2%** decrease in resource utilization
+This repository contains model-based simulation code and generated datasets; it does not execute a production ZK prover or benchmark real prover hardware.
 
 ## Repository Structure
 
-```
-adaptive-proof-scheduling/
-├── README.md                    # This file
-├── LICENSE                      # project is licensed under the BSD 3-Clause License.
- License
-├── requirements.txt             # Python dependencies
-├── configs/
-│   ├── simulation_params.yaml   # Core simulation parameters
-│   ├── hardware_specs.yaml      # Hardware configuration
-│   └── algorithm_params.yaml    # Scheduling algorithm parameters
-├── src/
-│   ├── __init__.py
-│   ├── adaptive_scheduler.py    # Adaptive window scheduling algorithm
-│   ├── fixed_scheduler.py       # Fixed window baseline
-│   ├── proof_generator.py       # Proof generation simulation
-│   ├── verifier_pipeline.py     # Verification pipeline
-│   ├── transaction_generator.py # Poisson arrival process
-│   └── simulation_runner.py     # Main simulation orchestrator
-├── data/
-│   ├── raw/
-│   │   ├── throughput_results.csv
-│   │   ├── latency_results.csv
-│   │   └── resource_utilization.csv
-│   └── processed/
-│       └── summary_statistics.csv
-├── scripts/
-│   ├── run_experiment.py        # Execute full experiment suite
-│   ├── analyze_results.py       # Statistical analysis
-│   └── generate_figures.py      # Reproduce  figures
-└── docs/
-    └── experimental_setup.md    # Detailed experimental methodology
+```text
+src/        Core pipeline, schedulers, controller, and workload models
+scripts/    Campaigns, parameter sweeps, analysis, and figure generation
+configs/    Simulation, controller, and hardware-model parameters
+data/       Raw campaign outputs and processed results
+docs/       Experimental setup, provenance, and supporting notes
 ```
 
 ## Quick Start
 
-### Installation
-
 ```bash
-# Clone the repository
-git clone https://github.com/[username]/adaptive-proof-scheduling.git
+git clone https://github.com/blockchain2030/adaptive-proof-scheduling.git
 cd adaptive-proof-scheduling
 
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### Running Simulations
+Run a campaign:
 
 ```bash
-# Run complete experiment suite (30 trials per configuration)
-python scripts/run_experiment.py --config configs/simulation_params.yaml
-
-# Run single configuration test
-python scripts/run_experiment.py --arrival-rate 5000 --trials 5
-
-# Analyze results
-python scripts/analyze_results.py --input data/raw/ --output data/processed/
-
-# Generate figures
-python scripts/generate_figures.py --input data/processed/
+python scripts/run_campaign.py --trials 30
 ```
 
-## Experimental Parameters
+Run alternative workloads:
 
-### Simulation Configuration
-
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| Arrival rates | 100–10,000 tx/s | Poisson process mean rates |
-| Proof generation time | 50–500 ms | Based on empirical measurements |
-| Trials per configuration | 30 | For statistical validity |
-| Transactions per trial | 50,000 | After 5,000 warm-up transactions |
-| Warm-up period | 5,000 tx | Eliminated from measurements |
-
-### Adaptive Scheduling Algorithm Parameters
-
-| Parameter | Symbol | Value | Description |
-|-----------|--------|-------|-------------|
-| Smoothing decay | α | 0.15 | Exponential smoothing for arrival rate |
-| Proportional gain | K_p | 0.8 | PI controller proportional coefficient |
-| Integral gain | K_i | 0.2 | PI controller integral coefficient |
-| Expansion factor | β | 1.25 | Multiplicative increase factor |
-| Contraction decrement | - | 50 ms | Additive decrease value |
-| Minimum adjustment interval | T_adj | 500 ms | Prevents rapid oscillations |
-| Hysteresis band | - | ±10% | Prevents threshold chattering |
-
-### Hardware Environment
-
-| Component | Specification |
-|-----------|---------------|
-| Compute nodes | 8 nodes |
-| Processors | Dual AMD EPYC 7763 (128 cores @ 2.45 GHz) |
-| Memory | 512 GB DDR4-3200 per node |
-| L3 Cache | 256 MB |
-| Storage | NVMe SSD (7,000 MB/s sequential read) |
-| Network | 100 Gbps Ethernet with RDMA |
-| OS | Ubuntu 22.04 LTS, Linux kernel 5.15.0 |
-
-### Cryptographic Configuration
-
-| Component | Implementation |
-|-----------|----------------|
-| Proving system | Groth16 |
-| Elliptic curve | BN254 |
-| Framework | arkworks-rs v0.4.2 |
-| RNG | ChaCha20 (hardware entropy seeded) |
-
-## Results Summary
-
-### Throughput Comparison (Table 1)
-
-| Arrival Rate (tx/s) | Adaptive (proofs/s) | Fixed (proofs/s) | Improvement |
-|---------------------|---------------------|------------------|-------------|
-| 1,000 | 987.3 ± 23.4 | 834.6 ± 31.2 | 18.3% |
-| 2,500 | 2,456.8 ± 45.7 | 1,987.3 ± 58.9 | 23.6% |
-| 5,000 | 4,847.2 ± 89.6 | 3,778.4 ± 112.3 | 28.3% |
-| 7,500 | 7,234.5 ± 123.4 | 5,456.7 ± 156.8 | 32.6% |
-| 10,000 | 9,234.8 ± 156.2 | 6,882.3 ± 198.7 | 34.2% |
-
-### Latency Distribution at 5,000 tx/s (Table 2)
-
-| Metric | Adaptive | Fixed |
-|--------|----------|-------|
-| Mean latency | 127.4 ± 18.3 ms | 195.2 ± 34.7 ms |
-| Median latency | 119.8 ± 15.6 ms | 178.4 ± 29.3 ms |
-| 95th percentile | 168.9 ± 22.4 ms | 287.4 ± 45.8 ms |
-| 99th percentile | 198.3 ± 28.7 ms | 356.7 ± 62.4 ms |
-
-## Citation
-
-If you use this code or data in your research, please cite:
-
-```bibtex
-@article{shahid2026adaptive,
-  title={Adaptive Proof Window Scheduling for Continuous Zero Knowledge Proof Transfer},
-  author={Muhammad Shahid and Suziyanti Marjudi  and Abd Samad Hasan Basari},
-  journal={[Journal Name]},
-  year={2026},
-  publisher={[Publisher]}
-}
+```bash
+python scripts/run_campaign.py --workload mmpp --trials 30
+python scripts/run_campaign.py --workload onoff --trials 30
 ```
+
+Run parameter sweeps:
+
+```bash
+python scripts/sweep.py --fixed-window --trials 5
+python scripts/sweep.py --l-target --trials 5
+python scripts/sweep.py --gains --trials 5
+```
+
+Analyze a campaign:
+
+```bash
+python scripts/analyze.py data/raw/campaign.csv
+```
+
+## Experimental Scope
+
+- Workloads: Poisson, Markov-modulated Poisson, and on/off arrivals
+- Scheduling: fixed-window and adaptive control variants
+- Repeated seeded trials for reproducibility
+- Bounded queues with explicit admission, drop, backlog, and completion accounting
+- Fixed-window, latency-target, controller-gain, and saturation sweeps
+- Raw and processed CSV outputs retained under `data/`
+
+Detailed assumptions and provenance are available in `docs/experimental_setup.md` and `docs/PROVENANCE.md`.
 
 ## License
 
-## License
-This project is licensed under the BSD 3-Clause License.
-- see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-This research was supported by Universiti Tun Hussein Onn Malaysia (UTHM) through Tier 1 (vot J122).
-
-## Contact
-
-- **Corresponding Author:** Muhammad Shahid
-- **Email:** hi240017@student.uthm.edu.my
-- **Institution:** Faculty of Computer Science and Information Technology, UTHM
+Licensed under the BSD 3-Clause License. See [LICENSE](LICENSE).
